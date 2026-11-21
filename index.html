@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Column + Planar Arm Robot Simulator</title>
+<style>
+:root{--bg:#12151c;--panel:#1a1f2b;--line:#2a3142;--tx:#e6e9f0;--mut:#8b94a8;--acc:#4da3ff;--hot:#ff6b5b;--ok:#4cd08a;--warn:#ffb84d}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px/1.4 system-ui,sans-serif}
+#app{display:grid;grid-template-columns:1fr 400px;height:100vh}
+#view{position:relative;min-height:300px}#view canvas{display:block;width:100%;height:100%;cursor:grab}
+#hud{position:absolute;left:10px;top:10px;background:#12151ccc;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;pointer-events:none;line-height:1.6}
+#hud i{display:inline-block;width:14px;height:10px;vertical-align:middle;margin-right:6px;border-radius:2px}
+#panel{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:12px}
+h3{margin:14px 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+button{background:#232a3a;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:5px 9px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}button.on{background:var(--acc);color:#05111f;border-color:var(--acc)}
+.s{display:grid;grid-template-columns:70px 1fr 64px;gap:2px 8px;align-items:center;margin:4px 0}
+.s b{font-weight:600}.s small{grid-column:2/4;color:var(--mut);font-size:11px;margin-top:-2px}.s span{text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--acc)}
+label.c{display:flex;gap:7px;align-items:center;margin:4px 0;cursor:pointer}
+#status{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px;font-size:12px;line-height:1.7}
+.good{color:var(--ok)}.bad{color:var(--hot)}.warn{color:var(--warn)}.mut{color:var(--mut)}
+#ana{font-size:12px;color:var(--mut);margin-top:6px;line-height:1.6}
+</style></head><body>
+<div id="app">
+ <div id="view">
+  <div id="hud">drag = orbit · wheel = zoom · shift-drag = pan<br>
+   <i style="background:#3d8bff55;border:1px solid #6aaeff"></i>300 mm workspace sphere (only the tool may enter)<br>
+   <i style="background:#ff4d4d"></i>part of the structure inside the sphere (not allowed)<br>
+   <i style="background:#ffd24d"></i>tool tip (TCP) &nbsp; <i style="background:#38e0ff"></i>target</div>
+ </div>
+ <div id="panel">
+  <div class="row" id="views">
+   <button data-v="iso">Isometric</button><button data-v="front">Front</button><button data-v="top">Top</button><button data-v="side">Side</button><button id="zoomS">Zoom to sphere</button>
+  </div>
+  <h3>Mode</h3>
+  <div class="row"><button id="mJ" class="on">Joint sliders</button><button id="mT">Go to a point (IK)</button></div>
+  <label class="c"><input type="checkbox" id="plan" checked> plan collision-free paths (arm goes AROUND the sphere)</label>
+  <label class="c"><input type="checkbox" id="showSph" checked> show workspace sphere</label>
+  <label class="c"><input type="checkbox" id="showTrail" checked> show tool-tip trail</label>
+  <label class="c"><input type="checkbox" id="showAx"> show joint axes / labels</label>
+  <label class="c"><input type="checkbox" id="fcMirror"> mirror live into FreeCAD window</label>
+
+  <div id="jointBox">
+   <h3>Joints (manual: no planning, red = inside sphere)</h3>
+   <div class="s"><b>d2</b><input type="range" id="q0" min="40" max="1290" step="1"><span id="v0"></span><small>prismatic · carriage slides up/down on the fixed column</small></div>
+   <div class="s"><b>θ1</b><input type="range" id="q1" min="-180" max="180" step="0.5" value="0"><span id="v1"></span><small>revolute · shoulder, vertical axis on the carriage</small></div>
+   <div class="s"><b>θ2</b><input type="range" id="q2" min="-150" max="150" step="0.5" value="0"><span id="v2"></span><small>revolute · elbow 1 (vertical axis) between link 1 and link 2</small></div>
+   <div class="s"><b>θ3</b><input type="range" id="q3" min="-150" max="150" step="0.5" value="0"><span id="v3"></span><small>revolute · elbow 2 (vertical axis) between link 2 and forearm</small></div>
+   <div class="s"><b>R1</b><input type="range" id="q4" min="-180" max="180" step="0.5" value="0"><span id="v4"></span><small>revolute · wrist roll about the forearm axis</small></div>
+   <div class="s"><b>R2</b><input type="range" id="q5" min="20" max="160" step="0.5" value="90"><span id="v5"></span><small>revolute · wrist pitch (stops at 20°…160° → never aligned with the forearm = no wrist singularity)</small></div>
+  </div>
+
+  <div id="targetBox" style="display:none">
+   <h3>Target tool-tip (relative to sphere centre)</h3>
+   <div class="s"><b>X</b><input type="range" id="t0" min="-300" max="300" step="1" value="0"><span id="tv0"></span></div>
+   <div class="s"><b>Y</b><input type="range" id="t1" min="-300" max="300" step="1" value="0"><span id="tv1"></span></div>
+   <div class="s"><b>Z</b><input type="range" id="t2" min="-300" max="300" step="1" value="0"><span id="tv2"></span></div>
+   <h3>Tool direction</h3>
+   <div class="s"><b>azimuth</b><input type="range" id="t3" min="-180" max="180" step="1" value="0"><span id="tv3"></span><small>direction of the tool Z axis seen from above (0° = away from column)</small></div>
+   <div class="s"><b>elevation</b><input type="range" id="t4" min="-90" max="90" step="1" value="-60"><span id="tv4"></span><small>+90° = tool pointing straight up, −90° = straight down</small></div>
+  </div>
+
+  <h3>Demo</h3>
+  <div class="row"><button id="home">Home</button><button id="rand">Random point</button><button id="tour">Tour the sphere</button><button id="clr">Clear trail</button></div>
+
+  <h3>Status</h3>
+  <div id="status"></div>
+  <h3>Reachability analysis</h3>
+  <div class="row"><button id="ana-btn">Run Monte-Carlo (server)</button></div>
+  <div id="ana">Samples random positions inside the sphere and random tool directions, and counts how many are reachable without any part of the structure entering the sphere.</div>
+ </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s), D2R = Math.PI / 180;
+// ── constants (must match robot.py) ───────────────────────────────────────────
+const TOOL = 300, SPH_R = 300, SPH_C = [600, 0, 650], L1 = 450, L2 = 450, LF = 450;
+const COL_R = 45, ARM_R = 28, WRIST_R = 48, JOINT_R = 50, COL_H = 1400, MARGIN = 5, COLX = COL_R + ARM_R + MARGIN;
+const PLAN_EXTRA = 8;                     // extra clearance while planning: covers the gap between sampled configurations
+const SIG_MIN = 150, SING_W = 20 * D2R;   // singularity margins: min singular value of the planar-arm Jacobian [mm/rad]; wrist stop on R2
+const LO = [40, -Math.PI, -150 * D2R, -150 * D2R, -Math.PI, SING_W], HI = [1290, Math.PI, 150 * D2R, 150 * D2R, Math.PI, Math.PI - SING_W];
+const REF = [0.6, -1.2, 0.6];
+
+// ── vector helpers ────────────────────────────────────────────────────────────
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]), norm = a => mul(a, 1 / (len(a) || 1));
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const wrap = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+const U = a => [Math.cos(a), Math.sin(a), 0];
+
+// ── kinematics (same maths as robot.py) ───────────────────────────────────────
+function fk(q) {
+  const [d2, t1, t2, t3, r1, r2] = q, base = [0, 0, d2];
+  const J = add(base, mul(U(t1), L1)), E = add(J, mul(U(t1 + t2), L2)), f = U(t1 + t2 + t3), z = [0, 0, 1], g = cross(z, f), W = add(E, mul(f, LF));
+  const yp = add(mul(g, Math.cos(r1)), mul(z, Math.sin(r1))), zp = add(mul(g, -Math.sin(r1)), mul(z, Math.cos(r1)));
+  const zt = add(mul(f, Math.cos(r2)), mul(zp, -Math.sin(r2)));
+  return { base, J, E, W, f, g, z, yp, zp, zt, xt: cross(yp, zt), yt: yp, u1: U(t1), u12: U(t1 + t2), tcp: add(W, mul(zt, TOOL)) };
+}
+function segDist(p, a, b) { const ab = sub(b, a), t = clamp(dot(sub(p, a), ab) / Math.max(dot(ab, ab), 1e-12), 0, 1); return len(sub(p, add(a, mul(ab, t)))); }
+function axisDistXY(a, b) { const abx = b[0] - a[0], aby = b[1] - a[1], t = clamp(-(a[0] * abx + a[1] * aby) / Math.max(abx * abx + aby * aby, 1e-12), 0, 1); return Math.hypot(a[0] + t * abx, a[1] + t * aby); }
+// smallest (distance - required): links, joints and wrist vs the sphere, and links vs the column.  extra = additional safety margin (used when planning)
+function clearance(base, J, E, W, extra = 0) {
+  const c = SPH_C, r = SPH_R + ARM_R + MARGIN + extra;
+  return Math.min(segDist(c, base, J) - r, segDist(c, J, E) - r, segDist(c, E, W) - r,
+    len(sub(c, J)) - SPH_R - JOINT_R - MARGIN - extra, len(sub(c, E)) - SPH_R - JOINT_R - MARGIN - extra, len(sub(c, W)) - SPH_R - WRIST_R - MARGIN - extra,
+    axisDistXY(J, E) - COLX, axisDistXY(E, W) - COLX);
+}
+function hits(F) {      // strict (no margin): names of the parts really inside the sphere
+  const c = SPH_C, h = [];
+  if (segDist(c, F.base, F.J) < SPH_R + ARM_R || len(sub(c, F.J)) < SPH_R + JOINT_R) h.push("link 1 / shoulder");
+  if (segDist(c, F.J, F.E) < SPH_R + ARM_R || len(sub(c, F.E)) < SPH_R + JOINT_R) h.push("link 2 / elbow");
+  if (segDist(c, F.E, F.W) < SPH_R + ARM_R) h.push("forearm");
+  if (len(sub(c, F.W)) < SPH_R + WRIST_R) h.push("wrist R1/R2");
+  return h;
+}
+// smallest singular value of the 2x3 position Jacobian of (th1,th2,th3); 0 only when link 1, link 2 and forearm are collinear
+function sigmaArm(J, E, W) {
+  let a = 0, b = 0, c = 0;
+  for (const P of [[0, 0], J, E]) { const x = -(W[1] - P[1]), y = W[0] - P[0]; a += x * x; b += x * y; c += y * y; }
+  return Math.sqrt(Math.max((a + c) / 2 - Math.sqrt(((a - c) / 2) ** 2 + b * b), 0));
+}
+function inBounds(q) { for (let i = 0; i < 6; i++) if (q[i] < LO[i] - 1e-6 || q[i] > HI[i] + 1e-6) return false; return true; }
+// IK: wrist centre W = TCP - 300 d.  The 3 planar revolutes have one redundant DOF (forearm angle phi): search it, keep valid + collision-free solutions, return the one closest to qref
+function ik(tcp, d, qref) {
+  d = norm(d); const W = sub(tcp, mul(d, TOOL)), ref = qref ? [qref[1], qref[2], qref[3]] : REF; let best = null;
+  if (W[2] >= LO[0] && W[2] <= HI[0]) for (const s of [1, -1]) for (let k = 0; k < 144; k++) {
+    const phi = -Math.PI + 2 * Math.PI * k / 144, ex = W[0] - LF * Math.cos(phi), ey = W[1] - LF * Math.sin(phi), r = Math.hypot(ex, ey);
+    if (r > L1 + L2 || r < Math.abs(L1 - L2) + 1e-6) continue;
+    const a = Math.acos(clamp((L1 * L1 + r * r - L2 * L2) / (2 * L1 * r), -1, 1)), t1 = wrap(Math.atan2(ey, ex) + s * a);
+    const jx = L1 * Math.cos(t1), jy = L1 * Math.sin(t1), t12 = Math.atan2(ey - jy, ex - jx), t2 = wrap(t12 - t1), t3 = wrap(phi - t12);
+    const r2 = Math.acos(clamp(d[0] * Math.cos(phi) + d[1] * Math.sin(phi), -1, 1)), z = W[2];
+    const valid = Math.abs(t2) <= HI[2] && Math.abs(t3) <= HI[3] && r2 >= LO[5] && r2 <= HI[5] && sigmaArm([jx, jy], [ex, ey], W) >= SIG_MIN;
+    const clr = clearance([0, 0, z], [jx, jy, z], [ex, ey, z], W), good = valid && clr >= 0;
+    const cost = wrap(t1 - ref[0]) ** 2 + (t2 - ref[1]) ** 2 + (t3 - ref[2]) ** 2;
+    const key = good ? (clr >= PLAN_EXTRA ? -cost : -100 - cost) : valid ? -1e3 + clr * 1e-3 : -1e6 + clr * 1e-3;   // prefer solutions that keep the planning margin
+    if (!best || key > best.key) best = { key, t1, t2, t3, good };
+  }
+  if (!best) return { q: null, ok: false, W };
+  const f = U(best.t1 + best.t2 + best.t3), g = cross([0, 0, 1], f), du = dot(d, f), dg = dot(d, g), dz = d[2], h = Math.hypot(dg, dz);
+  return { q: [W[2], best.t1, best.t2, best.t3, h > 1e-9 ? Math.atan2(dg, -dz) : 0, Math.atan2(h, du)], ok: best.good, W };
+}
+
+// ── collision-free motion planning: RRT-Connect in joint space + path shortcutting ──
+const WJ = [1 / 300, 1, 1, 1, 0.3, 0.3];  // joint-space metric (mm -> rad equivalent)
+const jd = (a, b) => { let s = 0; for (let i = 0; i < 6; i++) s += ((a[i] - b[i]) * WJ[i]) ** 2; return Math.sqrt(s); };
+let planExtra = PLAN_EXTRA;
+function freeCfg(q, extra = planExtra) { if (!inBounds(q)) return false; const F = fk(q); return sigmaArm(F.J, F.E, F.W) >= SIG_MIN && clearance(F.base, F.J, F.E, F.W, extra) >= 0; }
+function edgeFree(a, b) {
+  const n = Math.max(1, Math.ceil(jd(a, b) / 0.008));
+  for (let i = 0; i <= n; i++) { const t = i / n; if (!freeCfg(a.map((v, k) => v + (b[k] - v) * t))) return false; }
+  return true;
+}
+function randCfg() { return LO.map((l, i) => l + Math.random() * (HI[i] - l)); }
+function steer(a, b, step) { const d = jd(a, b); if (d <= step) return b.slice(); return a.map((v, k) => v + (b[k] - v) * step / d); }
+function nearest(T, q) { let bi = 0, bd = 1e18; for (let i = 0; i < T.length; i++) { const d = jd(T[i].q, q); if (d < bd) { bd = d; bi = i; } } return bi; }
+function extend(T, q, step) { const i = nearest(T, q), nq = steer(T[i].q, q, step); if (!edgeFree(T[i].q, nq)) return null; T.push({ q: nq, p: i }); return T.length - 1; }
+function pathOf(T, i) { const p = []; while (i !== -1) { p.push(T[i].q); i = T[i].p; } return p.reverse(); }
+function dedupe(p) { const o = [p[0]]; for (let i = 1; i < p.length; i++) if (jd(o[o.length - 1], p[i]) > 1e-6) o.push(p[i]); return o; }
+function shortcut(path) {
+  for (let it = 0; it < 80 && path.length > 2; it++) {
+    const i = Math.floor(Math.random() * (path.length - 2)), j = i + 2 + Math.floor(Math.random() * (path.length - i - 2));
+    if (j < path.length && edgeFree(path[i], path[j])) path.splice(i + 1, j - i - 1);
+  }
+  return path;
+}
+function planPath(a, b, maxIter = 6000) {
+  if (!freeCfg(b)) return null;
+  if (!freeCfg(a) && planExtra > 0 && freeCfg(a, 0)) return null;   // start is clear but inside the extra margin: caller retries with margin 0
+  if (!freeCfg(a)) {                          // start is already inside the keep-out zone (user dragged a slider there): escape to the nearest free configuration first
+    let best = null, bd = 1e18;
+    for (let k = 0; k < 400; k++) { const c = randCfg(); if (freeCfg(c)) { const d = jd(a, c); if (d < bd) { bd = d; best = c; } } }
+    if (!best) return null; const rest = planPath(best, b, maxIter); return rest ? [a].concat(rest) : null;
+  }
+  if (edgeFree(a, b)) return [a, b];
+  const A = [{ q: a, p: -1 }], B = [{ q: b, p: -1 }], step = 0.12; let swap = false;
+  for (let it = 0; it < maxIter; it++) {
+    const T1 = swap ? B : A, T2 = swap ? A : B, target = Math.random() < 0.15 ? (swap ? a : b) : randCfg();
+    if (!freeCfg(target)) { swap = !swap; continue; }
+    const ni = extend(T1, target, step);
+    if (ni !== null) {
+      let last = -1;
+      for (let k = 0; k < 80; k++) { const r = extend(T2, T1[ni].q, step); if (r === null) break; last = r; if (jd(T2[r].q, T1[ni].q) < 1e-9) { const p1 = pathOf(T1, ni), p2 = pathOf(T2, r); return shortcut(dedupe(swap ? p2.concat(p1.reverse().slice(1)) : p1.concat(p2.reverse().slice(1)))); } }
+    }
+    swap = !swap;
+  }
+  return null;
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let q, path = null, pi = 0, mode = "joint", tourOn = false, target = null, trail = [], note = "", hold = 0;
+const S = { sph: true, trail: true, ax: false, fc: false, plan: true };
+window.dbg = { frames: 0, viol: 0, plans: 0, fails: 0, detours: 0 };
+function moveTo(qg) {             // start a (planned) motion to the goal configuration
+  if (!S.plan) { path = [q.slice(), qg.slice()]; pi = 0; note = "straight joint-space move (planning off)"; return true; }
+  const t0 = performance.now(); let p = planPath(q.slice(), qg.slice()); window.dbg.plans++;
+  if (!p) { planExtra = 0; p = planPath(q.slice(), qg.slice()); planExtra = PLAN_EXTRA; }   // goal very close to the keep-out zone: retry without the extra planning margin (the 5 mm clearance margin still applies)
+  if (!p) { window.dbg.fails++; note = "no collision-free path found — staying put"; path = null; return false; }
+  if (p.length > 2) window.dbg.detours++;
+  note = p.length > 2 ? `planned detour around the sphere (${p.length} waypoints, ${(performance.now() - t0).toFixed(0)} ms)` : "direct path is already clear";
+  path = p; pi = 0; return true;
+}
+
+// ── camera + tiny 3D renderer (canvas 2D, painter's algorithm) ───────────────
+const cv = document.createElement("canvas"); $("#view").appendChild(cv); const g = cv.getContext("2d");
+const cam = { yaw: -0.85, pitch: 0.3, dist: 3600, t: [350, 0, 650] };
+let W_, H_, eye, right, up, fwd, FOC;
+function resize() { const r = $("#view").getBoundingClientRect(), dpr = devicePixelRatio || 1; cv.width = r.width * dpr; cv.height = r.height * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0); W_ = r.width; H_ = r.height; }
+addEventListener("resize", resize); resize();
+function setupCam() {
+  const cp = Math.cos(cam.pitch);
+  eye = [cam.t[0] + cam.dist * cp * Math.cos(cam.yaw), cam.t[1] + cam.dist * cp * Math.sin(cam.yaw), cam.t[2] + cam.dist * Math.sin(cam.pitch)];
+  fwd = norm(sub(cam.t, eye)); right = norm(cross(fwd, [0, 0, 1])); up = cross(right, fwd); FOC = 1.25 * Math.min(W_, H_);
+}
+function P(p) { const v = sub(p, eye), z = dot(v, fwd), s = FOC / Math.max(z, 1); return [W_ / 2 + dot(v, right) * s, H_ / 2 - dot(v, up) * s, z]; }
+let items = [];
+const LIGHT = norm([0.4, -0.5, 0.8]);
+function poly(pts, col, alpha = 1) { const pp = pts.map(P); items.push({ k: "p", pp, col, alpha, z: pp.reduce((s, a) => s + a[2], 0) / pp.length - 1, n: cross(sub(pts[1], pts[0]), sub(pts[2], pts[0])), c0: pts[0] }); }
+function line(a, b, col, w = 1, alpha = 1, bias = 0) { const A = P(a), B = P(b); items.push({ k: "l", A, B, col, w, alpha, z: (A[2] + B[2]) / 2 - bias }); }
+function dotAt(p, r, col) { const A = P(p); items.push({ k: "d", A, r, col, z: A[2] - 400 }); }
+function text(p, s, col = "#cfd6e6") { const A = P(p); items.push({ k: "t", A, s, col, z: A[2] - 2000 }); }
+function shade(col, f) { return `rgb(${col.map(c => Math.round(c * f)).join(",")})`; }
+function drawPoly(it) {
+  let n = norm(it.n); if (dot(n, sub(eye, it.c0)) < 0) n = mul(n, -1);
+  const f = 0.45 + 0.6 * Math.max(0, dot(n, LIGHT));
+  g.globalAlpha = it.alpha; g.beginPath(); it.pp.forEach((a, i) => i ? g.lineTo(a[0], a[1]) : g.moveTo(a[0], a[1])); g.closePath();
+  g.fillStyle = shade(it.col, Math.min(f, 1.15)); g.fill(); g.strokeStyle = "rgba(0,0,0,.35)"; g.lineWidth = 0.7; g.stroke(); g.globalAlpha = 1;
+}
+function basisFor(axis) { const a = norm(axis), t = Math.abs(a[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0], u = norm(cross(a, t)); return [u, cross(a, u), a]; }
+function cyl(a, b, r, col, n = 18) {
+  const [u, v] = basisFor(sub(b, a)), ring = (c, i) => add(c, add(mul(u, r * Math.cos(2 * Math.PI * i / n)), mul(v, r * Math.sin(2 * Math.PI * i / n))));
+  for (let i = 0; i < n; i++) poly([ring(a, i), ring(a, i + 1), ring(b, i + 1), ring(b, i)], col);
+  poly(Array.from({ length: n }, (_, i) => ring(a, i)), col); poly(Array.from({ length: n }, (_, i) => ring(b, i)), col);
+}
+function box(c, ax, ay, az, hx, hy, hz, col) {
+  const pt = (sx, sy, sz) => add(c, add(mul(ax, sx * hx), add(mul(ay, sy * hy), mul(az, sz * hz))));
+  const F = [[[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]], [[-1, -1, -1], [-1, 1, -1], [-1, 1, 1], [-1, -1, 1]], [[-1, 1, -1], [1, 1, -1], [1, 1, 1], [-1, 1, 1]],
+    [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]], [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]], [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1]]];
+  F.forEach(f => poly(f.map(s => pt(...s)), col));
+}
+function circle3(c, a, b, r, col, w, alpha, n = 48) { let prev = null; for (let i = 0; i <= n; i++) { const t = 2 * Math.PI * i / n, p = add(c, add(mul(a, r * Math.cos(t)), mul(b, r * Math.sin(t)))); if (prev) line(prev, p, col, w, alpha); prev = p; } }
+
+const C_BASE = [78, 84, 98], C_J = [235, 140, 40], C_COL = [150, 158, 175], C_CAR = [60, 130, 230], C_L1 = [90, 120, 200], C_L2 = [110, 150, 225], C_FA = [170, 178, 195], C_R1 = [60, 190, 120], C_R2 = [225, 85, 100], C_TOOL = [240, 210, 80], RED = [235, 60, 60];
+function drawScene() {
+  setupCam(); items = [];
+  const F = fk(q), hh = hits(F), bad = n => hh.includes(n), X = [1, 0, 0], Y = [0, 1, 0], Z = [0, 0, 1], O = [0, 0, 0];
+  for (let x = -800; x <= 1800; x += 200) line([x, -1000, 0], [x, 1000, 0], "#2a3142", 1, 1, -3000);
+  for (let y = -1000; y <= 1000; y += 200) line([-800, y, 0], [1800, y, 0], "#2a3142", 1, 1, -3000);
+  line(O, [200, 0, 0], "#ff6b5b", 2, 1, 1000); line(O, [0, 200, 0], "#4cd08a", 2, 1, 1000); line(O, [0, 0, 200], "#4da3ff", 2, 1, 1000);
+  // FIXED base + column
+  cyl([0, 0, 0], [0, 0, 40], 200, C_BASE, 28);
+  cyl([0, 0, 40], [0, 0, COL_H], COL_R, C_COL, 20);
+  box([COL_R + 6, 0, (40 + COL_H) / 2], X, Y, Z, 8, 18, (COL_H - 40) / 2, [110, 118, 135]);
+  cyl([0, 0, COL_H], [0, 0, COL_H + 25], COL_R + 10, C_BASE, 20);
+  // carriage (prismatic d2) and shoulder turret (revolute th1)
+  const d2 = q[0], c0 = F.base;
+  box([0, 0, d2 - 85], X, Y, Z, 80, 80, 40, C_CAR);
+  cyl([0, 0, d2 - 45], [0, 0, d2 + 45], 68, C_J, 24);
+  // link 1, elbow joint 1, link 2, elbow joint 2, forearm
+  const u1 = F.u1, g1 = cross(Z, u1), u12 = F.u12, g12 = cross(Z, u12), fa = F.f, ga = F.g;
+  box(mul(add(c0, F.J), .5), u1, g1, Z, L1 / 2, 30, 24, bad("link 1 / shoulder") ? RED : C_L1);
+  cyl(sub(F.J, [0, 0, 45]), add(F.J, [0, 0, 45]), 42, bad("link 1 / shoulder") ? RED : C_J, 22);
+  box(mul(add(F.J, F.E), .5), u12, g12, Z, L2 / 2, 28, 22, bad("link 2 / elbow") ? RED : C_L2);
+  cyl(sub(F.E, [0, 0, 45]), add(F.E, [0, 0, 45]), 42, bad("link 2 / elbow") ? RED : C_J, 22);
+  box(mul(add(F.E, F.W), .5), fa, ga, Z, LF / 2 - 55, 26, 20, bad("forearm") ? RED : C_FA);
+  // wrist R1 (roll about forearm axis) + R2 (pitch)
+  cyl(add(F.W, mul(fa, -92)), add(F.W, mul(fa, -30)), 36, bad("wrist R1/R2") ? RED : C_R1, 20);
+  cyl(sub(F.W, mul(F.yp, 40)), add(F.W, mul(F.yp, 40)), 36, bad("wrist R1/R2") ? RED : C_R2, 20);
+  // tool
+  cyl(F.W, add(F.W, mul(F.zt, 60)), 14, C_TOOL, 14);
+  cyl(add(F.W, mul(F.zt, 60)), add(F.W, mul(F.zt, TOOL - 55)), 7, [230, 232, 240], 12);
+  const gp = add(F.W, mul(F.zt, TOOL - 30));
+  box(gp, F.xt, F.yt, F.zt, 9, 34, 26, C_TOOL);
+  box(add(gp, mul(F.zt, 22)), F.xt, F.yt, F.zt, 6, 40, 4, [200, 170, 60]);
+  if (S.ax) {
+    const ax_ = (c, d, L, col) => line(sub(c, mul(d, L)), add(c, mul(d, L)), col, 2, 0.9, 500);
+    ax_(c0, Z, 160, "#4da3ff"); text(add(c0, [90, 0, 150]), "d2 prismatic (carriage on fixed column)");
+    ax_(c0, Z, 120, "#ff9f43"); text(add(c0, [-260, 0, 80]), "θ1 shoulder");
+    ax_(F.J, Z, 100, "#ff9f43"); text(add(F.J, [0, 0, 110]), "θ2 elbow 1");
+    ax_(F.E, Z, 100, "#ff9f43"); text(add(F.E, [0, 0, 110]), "θ3 elbow 2");
+    ax_(F.W, fa, 110, "#3ddc84"); text(add(F.W, add(mul(fa, -60), [0, 0, 90])), "R1");
+    ax_(F.W, F.yp, 80, "#ff5d73"); text(add(F.W, mul(F.yp, 90)), "R2");
+    ax_(F.W, F.zt, 330, "#ffd24d"); text(add(F.W, mul(F.zt, 190)), "tool Z (no joint)");
+    text(add(F.W, [0, 0, 70]), "W (wrist centre)"); dotAt(F.W, 4, "#fff");
+  }
+  if (S.sph) {
+    const c = SPH_C, R = SPH_R;
+    circle3(c, X, Y, R, "#6aaeff", 1.2, .75); circle3(c, X, Z, R, "#6aaeff", 1.2, .75); circle3(c, Y, Z, R, "#6aaeff", 1.2, .75);
+    for (const dz of [-.5, .5]) circle3(add(c, [0, 0, dz * R]), X, Y, R * Math.sqrt(1 - dz * dz), "#6aaeff", .8, .4);
+    dotAt(c, 3, "#6aaeff");
+  }
+  if (target) { const t = target; line(add(t, [-25, 0, 0]), add(t, [25, 0, 0]), "#38e0ff", 2, 1, 900); line(add(t, [0, -25, 0]), add(t, [0, 25, 0]), "#38e0ff", 2, 1, 900); line(add(t, [0, 0, -25]), add(t, [0, 0, 25]), "#38e0ff", 2, 1, 900); }
+  if (S.trail) for (let i = 1; i < trail.length; i++) line(trail[i - 1], trail[i], "#ffd24d", 1.5, i / trail.length, 900);
+  dotAt(F.tcp, 5, "#ffd24d");
+  g.clearRect(0, 0, W_, H_);
+  if (S.sph) {
+    const c = P(SPH_C), edge = P(add(SPH_C, mul(right, SPH_R))), r = Math.hypot(edge[0] - c[0], edge[1] - c[1]) * 1.02;
+    const gr = g.createRadialGradient(c[0] - r * .3, c[1] - r * .3, r * .1, c[0], c[1], r); gr.addColorStop(0, "rgba(110,175,255,.20)"); gr.addColorStop(1, "rgba(60,120,230,.06)");
+    g.fillStyle = gr; g.beginPath(); g.arc(c[0], c[1], r, 0, 7); g.fill();
+  }
+  items.sort((a, b) => b.z - a.z);
+  for (const it of items) {
+    if (it.k === "p") drawPoly(it);
+    else if (it.k === "l") { g.globalAlpha = it.alpha; g.strokeStyle = it.col; g.lineWidth = it.w; g.beginPath(); g.moveTo(it.A[0], it.A[1]); g.lineTo(it.B[0], it.B[1]); g.stroke(); g.globalAlpha = 1; }
+    else if (it.k === "d") { g.fillStyle = it.col; g.beginPath(); g.arc(it.A[0], it.A[1], it.r, 0, 7); g.fill(); }
+    else { g.fillStyle = it.col; g.font = "12px system-ui"; g.fillText(it.s, it.A[0] + 6, it.A[1] - 4); }
+  }
+  return { F, hh };
+}
+
+// ── UI ────────────────────────────────────────────────────────────────────────
+const ANG = i => i >= 1, fmt = (i, v) => ANG(i) ? (v / D2R).toFixed(1) + "°" : v.toFixed(0) + " mm";
+function syncSliders() { for (let i = 0; i < 6; i++) { const el = $("#q" + i); if (document.activeElement !== el) el.value = ANG(i) ? q[i] / D2R : q[i]; $("#v" + i).textContent = fmt(i, q[i]); } }
+function readTargetSliders() {
+  const rel = [0, 1, 2].map(i => +$("#t" + i).value), az = +$("#t3").value * D2R, el = +$("#t4").value * D2R;
+  const L = len(rel), k = L > SPH_R ? SPH_R / L : 1, p = add(SPH_C, mul(rel, k)), d = [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
+  ["tv0", "tv1", "tv2"].forEach((id, i) => $("#" + id).textContent = rel[i] + " mm"); $("#tv3").textContent = (az / D2R).toFixed(0) + "°"; $("#tv4").textContent = (el / D2R).toFixed(0) + "°";
+  return { p, d };
+}
+function goTarget(p, d) {
+  target = p; const r = ik(p, d, q);
+  if (r.ok) { moveTo(r.q); return; }
+  path = null; const wIn = len(sub(r.W, SPH_C)) < SPH_R + WRIST_R + MARGIN;
+  note = wIn ? "this pose is impossible for ANY robot with a 300 mm tool: the wrist centre would be inside the sphere — choose another tool direction" : "no solution inside the joint limits that keeps the structure out of the sphere";
+}
+function stopMotion() { path = null; tourOn = false; $("#tour").classList.remove("on"); }
+function setMode(m) {
+  mode = m; $("#mJ").classList.toggle("on", m === "joint"); $("#mT").classList.toggle("on", m === "target");
+  $("#jointBox").style.display = m === "joint" ? "" : "none"; $("#targetBox").style.display = m === "target" ? "" : "none";
+  if (m === "joint") target = null; else { stopMotion(); const t = readTargetSliders(); goTarget(t.p, t.d); }
+}
+$("#mJ").onclick = () => { stopMotion(); setMode("joint"); }; $("#mT").onclick = () => setMode("target");
+for (let i = 0; i < 6; i++) $("#q" + i).oninput = e => { stopMotion(); if (mode !== "joint") setMode("joint"); target = null; q[i] = ANG(i) ? +e.target.value * D2R : +e.target.value; note = "manual joint control"; };
+for (let i = 0; i < 5; i++) $("#t" + i).oninput = () => { tourOn = false; $("#tour").classList.remove("on"); const t = readTargetSliders(); goTarget(t.p, t.d); };
+$("#plan").onchange = e => S.plan = e.target.checked; $("#showSph").onchange = e => S.sph = e.target.checked;
+$("#showTrail").onchange = e => S.trail = e.target.checked; $("#showAx").onchange = e => S.ax = e.target.checked; $("#fcMirror").onchange = e => S.fc = e.target.checked;
+function toJointMode() { mode = "joint"; $("#mJ").classList.add("on"); $("#mT").classList.remove("on"); $("#jointBox").style.display = ""; $("#targetBox").style.display = "none"; }
+$("#home").onclick = () => { stopMotion(); toJointMode(); target = null; moveTo(HOME); };
+function randomPose() {
+  for (let k = 0; k < 300; k++) {
+    const v = [Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1]; if (len(v) > 1) continue;
+    const p = add(SPH_C, mul(v, SPH_R)), a = Math.random() * 2 * Math.PI, el = Math.asin(Math.random() * 2 - 1), d = [Math.cos(el) * Math.cos(a), Math.cos(el) * Math.sin(a), Math.sin(el)];
+    const r = ik(p, d, q); if (r.ok && freeCfg(r.q) && moveTo(r.q)) { target = p; return true; }
+  }
+  return false;
+}
+$("#rand").onclick = () => { stopMotion(); toJointMode(); randomPose(); };
+$("#tour").onclick = e => { tourOn = !tourOn; e.target.classList.toggle("on", tourOn); if (tourOn) { toJointMode(); randomPose(); } };
+$("#clr").onclick = () => trail = [];
+const VIEWS = { iso: [-0.85, 0.3], front: [-Math.PI / 2, 0.05], top: [-Math.PI / 2 + 0.001, 1.52], side: [0, 0.05] };
+document.querySelectorAll("#views button[data-v]").forEach(b => b.onclick = () => { [cam.yaw, cam.pitch] = VIEWS[b.dataset.v]; cam.dist = 3600; cam.t = [350, 0, 650]; });
+$("#zoomS").onclick = () => { cam.t = SPH_C.slice(); cam.dist = 1700; };
+let drag = null;
+cv.onmousedown = e => { drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 }; cv.style.cursor = "grabbing"; };
+addEventListener("mouseup", () => { drag = null; cv.style.cursor = "grab"; });
+addEventListener("mousemove", e => {
+  if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  if (drag.pan) { const k = cam.dist / FOC; cam.t = add(cam.t, add(mul(right, -dx * k), mul(up, dy * k))); }
+  else { cam.yaw -= dx * 0.008; cam.pitch = clamp(cam.pitch + dy * 0.008, -1.5, 1.53); }
+});
+cv.oncontextmenu = e => e.preventDefault();
+cv.addEventListener("wheel", e => { e.preventDefault(); cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 400, 9000); }, { passive: false });
+
+function status(F, hh) {
+  const rel = sub(F.tcp, SPH_C), inside = len(rel) <= SPH_R + 1, sa = sigmaArm(F.J, F.E, F.W);
+  let tgt = ""; if (target && !path) { const err = len(sub(F.tcp, target)); tgt = err > 2 ? '<span class="bad">target not reached</span>' : '<span class="good">target reached</span>'; } else if (path) tgt = '<span class="mut">moving…</span>';
+  $("#status").innerHTML =
+    `TCP rel. to sphere centre: (${rel.map(v => v.toFixed(0)).join(", ")}) mm · ${inside ? '<span class="good">inside sphere</span>' : '<span class="mut">outside sphere</span>'}<br>` +
+    `Wrist centre W: (${F.W.map(v => v.toFixed(0)).join(", ")}) mm<br>` + (tgt ? tgt + "<br>" : "") +
+    `Structure vs sphere: ${hh.length ? `<span class="bad">${hh.join(", ")} inside the sphere ✗</span>` : '<span class="good">clear ✓ (only the tool enters)</span>'}<br>` +
+    `Motion: <span class="mut">${note || "—"}</span><br>` +
+    `Singularities: arm σmin = <b>${sa.toFixed(0)}</b> mm/rad (limit ≥ ${SIG_MIN}) · wrist angle R2 = <b>${(q[5] / D2R).toFixed(0)}°</b> (stops ${(LO[5] / D2R).toFixed(0)}°…${(HI[5] / D2R).toFixed(0)}°) → ${sa >= SIG_MIN && q[5] >= LO[5] - 1e-6 && q[5] <= HI[5] + 1e-6 ? '<span class="good">away from all singularities ✓</span>' : '<span class="bad">near a singularity ✗</span>'}`;
+}
+let fcBusy = false, fcLast = 0;
+function pushFC() { if (!S.fc || fcBusy || Date.now() - fcLast < 120) return; fcBusy = true; fcLast = Date.now(); fetch("/freecad", { method: "POST", body: JSON.stringify({ q }) }).catch(() => { }).finally(() => fcBusy = false); }
+$("#ana-btn").onclick = async () => {
+  $("#ana").textContent = "running… (a few seconds)";
+  try {
+    const r = await (await fetch("/analyse", { method: "POST", body: "{}" })).json();
+    $("#ana").innerHTML = `${r.n} random (position, tool-direction) samples inside the sphere:<br><span class="bad">${((1 - r.possible) * 100).toFixed(0)} %</span> are impossible for ANY robot (the 300 mm tool would put the wrist inside the sphere).<br>` +
+      `Of the possible ones, <b class="good">${(r.ok_given_possible * 100).toFixed(1)} %</b> are solved with the structure always outside the sphere.<br>` +
+      `Positions with at least one valid tool direction: <b>${(r.any_dir * 100).toFixed(0)} %</b> · average share of possible directions solved per position: <b>${(r.mean_solved * 100).toFixed(0)} %</b>`;
+  } catch (e) { $("#ana").textContent = "analysis needs the python server (python3 server.py)"; }
+};
+
+// ── main loop ─────────────────────────────────────────────────────────────────
+const SP = [650, 1.6, 2.0, 2.2, 3.0, 3.0];       // joint speeds: mm/s, rad/s
+const HOME = ik([600, 0, 700], [0, 0, -1], null).q;
+q = HOME.slice();
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; let moving = false;
+  if (path && pi < path.length - 1) {
+    const b = path[pi + 1]; let f = 1;
+    for (let i = 0; i < 6; i++) { const dl = Math.abs(b[i] - q[i]); if (dl > 1e-9) f = Math.min(f, SP[i] * dt * (tourOn ? 1.3 : 1) / dl); }
+    for (let i = 0; i < 6; i++) q[i] += (b[i] - q[i]) * f;
+    if (f >= 1) { q = b.slice(); pi++; } moving = true;
+  } else if (path) { path = null; }
+  if (tourOn && !moving) { hold += dt; if (hold > 0.3) { hold = 0; if (!randomPose()) note = "tour: no pose found"; } }
+  const { F, hh } = drawScene();
+  window.dbg.frames++; if (moving && hh.length) window.dbg.viol++;
+  const tcp = F.tcp; if (!trail.length || len(sub(tcp, trail[trail.length - 1])) > 6) { trail.push(tcp); if (trail.length > 500) trail.shift(); }
+  syncSliders(); status(F, hh); pushFC();
+  requestAnimationFrame(frame);
+}
+note = "ready"; setMode("joint"); requestAnimationFrame(frame);
+</script></body></html>

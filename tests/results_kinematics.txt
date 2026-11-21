@@ -1,0 +1,26 @@
+TEST 1 - Inverse kinematics accuracy (forward-kinematics round trip)
+  1063 solved poses: max position error = 8.22e-13 mm, max direction error = 4.21e-16
+
+TEST 2 - Reachability (Monte-Carlo, 3000 random tool-tip positions in the sphere + random tool directions)
+  physically possible for ANY robot (wrist centre outside sphere): 54.5 %
+  solved among the possible ones:                                  99.57 %
+  solved among ALL random pairs:                                   54.2 %
+
+TEST 3 - Which positions of the sphere can be reached? (800 random positions x 60 directions)
+  positions where NO direction is possible for ANY robot (wrist keep-out, ball of radius 53 mm at the sphere centre): 0.38 %  (geometry predicts 0.55 %)
+  among the other positions, those with at least one valid tool direction: 100.0 %
+  average share of possible directions solved:       99.6 %
+  worst position:                                    86.5 %
+
+TEST 4 - Singularities and Jacobian condition number, margins ON (final design)
+  solved poses analysed: 1602
+  smallest planar-arm sigma_min : 172.4 mm/rad   (limit 150.0)
+  smallest wrist angle R2       : 20.1 deg         (stop 20 deg)
+  worst / median condition number of the 5x6 task Jacobian: 15.0 / 6.1
+
+TEST 5 - Same test with the margins switched OFF (shows why they are needed)
+  smallest wrist angle R2: 1.1 deg
+  worst / median condition number: 42.5 / 6.1
+  solved among possible: 99.57 %
+
+TEST 6 - Why the other architectures were rejected (see README table) - not re-run here, scripts in the design-search folder

@@ -1,0 +1,7 @@
+TEST 7 - Planned motion between random reachable poses (RRT-Connect, 200 chained moves)
+  moves planned: 200, failed: 0, needing a detour around the sphere: 153
+  configurations checked along all paths: 16989
+  configurations with ANY part of the structure (not the tool) inside the sphere: 0
+  smallest clearance structure-to-sphere (incl. 5 mm margin): 0.1 mm  (>= 0 means clear)
+  smallest planar-arm sigma_min along all paths: 150.2 mm/rad (limit 150)
+  smallest wrist angle R2 along all paths: 20.6 deg (stop 20 deg)
